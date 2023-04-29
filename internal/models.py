@@ -15,7 +15,6 @@ import torch.nn.functional as F
 from torch.utils._pytree import tree_map
 from tqdm import tqdm
 gin.config.external_configurable(math.safe_exp, module='math')
-gin.config.external_configurable(coord.contract, module='coord')
 
 
 def set_kwargs(self, kwargs):
@@ -33,7 +32,7 @@ class Model(nn.Module):
     anneal_slope: float = 10  # Higher = more rapid annealing.
     stop_level_grad: bool = True  # If True, don't backprop across levels.
     use_viewdirs: bool = True  # If True, use view directions as input.
-    raydist_fn = None  # The curve used for ray dists.
+    raydist_fn = 'contract'  # The curve used for ray dists.
     ray_shape: str = 'cone'  # The shape of cast rays ('cone' or 'cylinder').
     disable_integration: bool = False  # If True, use PE instead of IPE.
     single_jitter: bool = True  # If True, jitter whole rays instead of samples.
@@ -55,7 +54,8 @@ class Model(nn.Module):
 
         # Construct MLPs. WARNING: Construction order may matter, if MLP weights are
         # being regularized.
-        self.nerf_mlp = NerfMLP()
+        self.nerf_mlp = NerfMLP(num_glo_features=self.num_glo_features,
+                                num_glo_embeddings=self.num_glo_embeddings)
         self.prop_mlp = self.nerf_mlp if self.single_mlp else PropMLP()
         # self.prop_mlp = torch.compile(self.prop_mlp)
         if self.num_glo_features > 0 and not config.zero_glo:
@@ -94,7 +94,7 @@ class Model(nn.Module):
             if not zero_glo:
                 # Construct/grab GLO vectors for the cameras of each input ray.
                 cam_idx = batch['cam_idx'][..., 0]
-                glo_vec = self.glo_vecs(cam_idx)
+                glo_vec = self.glo_vecs(cam_idx.long())
             else:
                 glo_vec = torch.zeros(batch['origins'].shape[:-1] + (self.num_glo_features,), device=device)
         else:
@@ -317,7 +317,7 @@ class MLP(nn.Module):
     enable_pred_normals: bool = False  # If True compute predicted normals.
     disable_density_normals: bool = False  # If True don't compute normals.
     disable_rgb: bool = False  # If True don't output RGB.
-    warp_fn = None
+    warp_fn = 'contract'
     basis_shape: str = 'icosahedron'  # `octahedron` or `icosahedron`.
     basis_subdivisions: int = 2  # Tesselation count. 'octahedron' + 1 == eye(3).
     num_glo_features: int = 0  # GLO vector length, disabled if 0.
@@ -385,7 +385,7 @@ class MLP(nn.Module):
             if self.use_n_dot_v:
                 last_dim_rgb += 1
 
-            if self.__class__.__name__ != "PropMLP" and self.num_glo_features > 0:
+            if self.__class__.__name__ == "NerfMLP" and self.num_glo_features > 0:
                 last_dim_rgb += self.num_glo_embeddings
             input_dim_rgb = last_dim_rgb
             for i in range(self.net_depth_viewdirs):
@@ -396,6 +396,31 @@ class MLP(nn.Module):
                 if i % self.skip_layer_dir == 0 and i > 0:
                     last_dim_rgb += input_dim_rgb
             self.rgb_layer = nn.Linear(last_dim_rgb, self.num_rgb_channels)
+
+    def predict_density(self, means, covs, rand):
+        """Helper function to output density."""
+        # Encode input positions
+
+        if self.warp_fn is not None:
+            means, covs = coord.track_linearize(self.warp_fn, means, covs)
+
+        lifted_means, lifted_vars = (
+            coord.lift_and_diagonalize(means, covs, self.pos_basis_t))
+        x = coord.integrated_pos_enc(lifted_means, lifted_vars,
+                                     self.min_deg_point, self.max_deg_point)
+
+        inputs = x
+        # Evaluate network to produce the output density.
+        for i in range(self.net_depth):
+            x = self.get_submodule(f"lin_first_stage_{i}")(x)
+            x = F.relu(x)
+            if i % self.skip_layer == 0 and i > 0:
+                x = torch.cat([x, inputs], dim=-1)
+        raw_density = self.density_layer(x)[..., 0]  # Hardcoded to a single channel.
+        # Add noise to regularize the density predictions if needed.
+        if rand and (self.density_noise > 0):
+            raw_density += self.density_noise * torch.randn_like(raw_density)
+        return raw_density, x
 
     def forward(self,
                 rand,
@@ -429,35 +454,9 @@ class MLP(nn.Module):
       normals_pred: [..., 3], or None.
       roughness: [..., 1], or None.
     """
-
-        def predict_density(means, covs):
-            """Helper function to output density."""
-            # Encode input positions
-
-            if self.warp_fn is not None:
-                means, covs = coord.track_linearize(self.warp_fn, means, covs)
-
-            lifted_means, lifted_vars = (
-                coord.lift_and_diagonalize(means, covs, self.pos_basis_t))
-            x = coord.integrated_pos_enc(lifted_means, lifted_vars,
-                                         self.min_deg_point, self.max_deg_point)
-
-            inputs = x
-            # Evaluate network to produce the output density.
-            for i in range(self.net_depth):
-                x = self.get_submodule(f"lin_first_stage_{i}")(x)
-                x = F.relu(x)
-                if i % self.skip_layer == 0 and i > 0:
-                    x = torch.cat([x, inputs], dim=-1)
-            raw_density = self.density_layer(x)[..., 0]  # Hardcoded to a single channel.
-            # Add noise to regularize the density predictions if needed.
-            if rand and (self.density_noise > 0):
-                raw_density += self.density_noise * torch.randn_like(raw_density)
-            return raw_density, x
-
         means, covs = gaussians
         if self.disable_density_normals:
-            raw_density, x = predict_density(means, covs)
+            raw_density, x = self.predict_density(means, covs, rand)
             raw_grad_density = None
             normals = None
         else:
@@ -466,16 +465,16 @@ class MLP(nn.Module):
             means_flat = means.reshape((-1, means.shape[-1]))
             covs_flat = covs.reshape((-1,) + covs.shape[len(means.shape) - 1:])
 
-            raw_density_flat, x_flat = predict_density(means_flat, covs_flat)
+            raw_density_flat, x_flat = self.predict_density(means_flat, covs_flat, rand)
             d_output = torch.ones_like(raw_density_flat, requires_grad=False, device=raw_density_flat.device)
-            raw_grad_density_flat = torch.autograd.grad(
-                outputs=raw_density_flat,
-                inputs=means,
-                grad_outputs=d_output,
-                create_graph=True,
-                retain_graph=True,
-                only_inputs=True)[0]
-
+            with torch.enable_grad():
+                raw_grad_density_flat = torch.autograd.grad(
+                    outputs=raw_density_flat,
+                    inputs=means,
+                    grad_outputs=d_output,
+                    create_graph=True,
+                    retain_graph=True,
+                    only_inputs=True)[0]
             # Unflatten the output.
             raw_density = raw_density_flat.reshape(means.shape[:-1])
             x = x_flat.reshape(means.shape[:-1] + (x_flat.shape[-1],))
@@ -503,7 +502,7 @@ class MLP(nn.Module):
 
         roughness = None
         if self.disable_rgb:
-            rgb = torch.zeros_like(means)
+            rgb = torch.zeros(density.shape + (3,), device=density.device)
         else:
             if viewdirs is not None:
                 # Predict diffuse color.
@@ -616,13 +615,15 @@ def render_image(render_fn,
                  accelerator: accelerate.Accelerator,
                  batch,
                  rand,
-                 config):
+                 config,
+                 verbose=True):
     """Render all the pixels of an image (in test mode).
 
   Args:
     render_fn: function, jit-ed render function mapping (rand, batch) -> pytree.
+    accelerator: used for DDP.
     batch: a `Rays` pytree, the rays to be rendered.
-    rand: if random.
+    rand: if random
     config: A Config class.
     verbose: print progress indicators.
 
@@ -637,7 +638,7 @@ def render_image(render_fn,
 
     local_rank = accelerator.local_process_index
     chunks = []
-    if accelerator.is_local_main_process:
+    if accelerator.is_local_main_process and verbose:
         idx0s = tqdm(range(0, num_rays, config.render_chunk_size), desc="Rendering chunk")
     else:
         idx0s = range(0, num_rays, config.render_chunk_size)

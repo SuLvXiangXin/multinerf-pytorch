@@ -1,6 +1,6 @@
 import dataclasses
 import os
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple, List
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -29,13 +29,13 @@ class Config:
     batch_size: int = 16384  # The number of rays/pixels in each batch.
     patch_size: int = 1  # Resolution of patches sampled for training batches.
     factor: int = 0  # The downsample factor of images, 0 for no downsampling.
-    load_alphabetical: bool = True  # Load images in COLMAP vs alphabetical
     # ordering (affects heldout test set).
     forward_facing: bool = False  # Set to True for forward-facing LLFF captures.
     render_path: bool = False  # If True, render a path. Used only by LLFF.
     llffhold: int = 8  # Use every Nth image for the test set. Used only by LLFF.
     # If true, use all input images for training.
     llff_use_all_images_for_training: bool = False
+    llff_use_all_images_for_testing: bool = False
     use_tiffs: bool = False  # If True, use 32-bit TIFFs. Used only by Blender.
     compute_disp_metrics: bool = False  # If True, load and compute disparity MSE.
     compute_normal_metrics: bool = False  # If True, load and compute normal MAE.
@@ -99,10 +99,8 @@ class Config:
     z_variation: float = 0.  # How much height variation in render path.
     z_phase: float = 0.  # Phase offset for height variation in render path.
     render_dist_percentile: float = 0.5  # How much to trim from near/far planes.
-    render_dist_curve_fn: Callable[..., Any] = torch.log  # How depth is curved.
+    render_dist_curve_fn: Callable[..., Any] = np.log  # How depth is curved.
     render_path_file: Optional[str] = None  # Numpy render pose file to load.
-    render_job_id: int = 0  # Render job id.
-    render_num_jobs: int = 1  # Total number of render jobs.
     render_resolution: Optional[Tuple[int, int]] = None  # Render resolution, as
     # (width, height).
     render_focal: Optional[float] = None  # Render focal length.
@@ -133,6 +131,12 @@ class Config:
 
     zero_glo: bool = False
 
+    # extract mesh
+    valid_weight_thresh: float = 0.05
+    mesh_resolution: int = 512
+    mesh_radius: float = 0.2
+    refine_save_interval: int = 1
+    refine_iters: int = 0
 
 def define_common_flags():
     # Define the flags used by both train.py and eval.py

@@ -176,11 +176,11 @@ def predicted_normal_loss(model, ray_history, config):
 
 def clip_gradients(model, accelerator, config):
     """Clips gradients of MLP based on norm and max value."""
-    # if config.grad_max_norm > 0 and accelerator.sync_gradients:
-    #     accelerator.clip_grad_norm_(model.parameters(), config.grad_max_norm)
-    #
-    # if config.grad_max_val > 0 and accelerator.sync_gradients:
-    #     accelerator.clip_grad_value_(model.parameters(), config.grad_max_val)
+    if config.grad_max_norm > 0 and accelerator.sync_gradients:
+        accelerator.clip_grad_norm_(model.parameters(), config.grad_max_norm)
+
+    if config.grad_max_val > 0 and accelerator.sync_gradients:
+        accelerator.clip_grad_value_(model.parameters(), config.grad_max_val)
 
     for param in model.parameters():
         param.grad.nan_to_num_()

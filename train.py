@@ -14,7 +14,6 @@ from internal import train_utils
 from internal import utils
 from internal import vis
 from internal import checkpoints
-from internal import camera_utils
 import torch
 import accelerate
 import tensorboardX
@@ -48,6 +47,7 @@ def main(unused_argv):
     model = models.Model(config=config)
     optimizer, lr_fn = train_utils.create_optimizer(config, model)
     init_step = checkpoints.restore_checkpoint(config.exp_path, model, optimizer) + 1
+    # model = torch.compile(model)  # not work yet
 
     # load dataset
     dataset = datasets.load_dataset('train', config.data_dir, config)
@@ -59,15 +59,13 @@ def main(unused_argv):
                                              batch_size=1,
                                              collate_fn=dataset.collate_fn,
                                              persistent_workers=True,
-                                             pin_memory=True,
                                              )
     test_dataloader = torch.utils.data.DataLoader(np.arange(len(test_dataset)),
-                                                  num_workers=8,
+                                                  num_workers=4,
                                                   shuffle=False,
                                                   batch_size=1,
-                                                  collate_fn=test_dataset.collate_fn,
                                                   persistent_workers=True,
-                                                  pin_memory=True,
+                                                  collate_fn=test_dataset.collate_fn,
                                                   )
     if config.rawnerf_mode:
         postprocess_fn = test_dataset.metadata['postprocess_fn']

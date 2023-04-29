@@ -7,13 +7,11 @@ Model.raydist_fn = @torch.reciprocal
 Model.num_glo_features = 4
 Model.opaque_background = True
 
-PropMLP.warp_fn = @coord.contract
 PropMLP.net_depth = 4
 PropMLP.net_width = 256
 PropMLP.disable_density_normals = True
 PropMLP.disable_rgb = True
 
-NerfMLP.warp_fn = @coord.contract
 NerfMLP.net_depth = 8
 NerfMLP.net_width = 1024
 NerfMLP.disable_density_normals = True
