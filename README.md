@@ -2,6 +2,9 @@
 
 An pytorch reimplementation of [multinerf](https://github.com/google-research/multinerf).
 
+## News
+- I have implemented "Zip-NeRF: Anti-Aliased Grid-Based Neural Radiance Fields" 
+[https://arxiv.org/abs/2304.06706](https://arxiv.org/abs/2304.06706), which is available at [here](https://github.com/SuLvXiangXin/zipnerf-pytorch)
 
 ## Install
 

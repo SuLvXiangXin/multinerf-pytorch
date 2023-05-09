@@ -32,7 +32,7 @@ def main(unused_argv):
     config.local_rank = accelerator.local_process_index
     utils.seed_everything(config.seed + accelerator.local_process_index)
     model = models.Model(config=config)
-
+    model.eval()
     model.to(accelerator.device)
 
     dataset = datasets.load_dataset('test', config.data_dir, config)

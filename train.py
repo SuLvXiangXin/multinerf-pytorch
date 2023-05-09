@@ -51,7 +51,7 @@ def main(unused_argv):
 
     # load dataset
     dataset = datasets.load_dataset('train', config.data_dir, config)
-    config.factor = 8  # for efficiency downsample 8x for test image while training
+    config.factor = 2  # for efficiency downsample 8x for test image while training
     test_dataset = datasets.load_dataset('test', config.data_dir, config)
     dataloader = torch.utils.data.DataLoader(np.arange(len(dataset)),
                                              num_workers=8,
@@ -75,6 +75,7 @@ def main(unused_argv):
     # use accelerate to prepare.
     # no need to prepare dataloader because data in each process are loaded differently
     model, optimizer = accelerator.prepare(model, optimizer)
+    model.eval()
     module = accelerator.unwrap_model(model)
     dataiter = iter(dataloader)
     test_dataiter = iter(test_dataloader)
@@ -274,7 +275,7 @@ def main(unused_argv):
                     int(step), keep=1)
 
         # Test-set evaluation.
-        if config.train_render_every > 0 and step % config.train_render_every == 0:
+        if step == 1 or step % config.train_render_every == 0:
             # We reuse the same random number generator from the optimization step
             # here on purpose so that the visualization matches what happened in
             # training.
